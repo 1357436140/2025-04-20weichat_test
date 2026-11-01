@@ -18,8 +18,11 @@ import time
 from common.driver import Driver
 from common.exec_cmd import ExecuteCommand
 from common.functions import screen_on
-from common.logger import Logger
+from common.logger import get_logger
 from common.watchers import LqWatcher
+
+
+logger = get_logger()
 
 
 class BaseTest:
@@ -66,7 +69,7 @@ class PageBase:
     def __init__(self):
         driver_class = Driver()
         self.driver = driver_class.get_android_driver()
-        print(self.driver)
+        logger.info(self.driver)
         self.sn = driver_class.device_name
         self.process = ExecuteCommand(self.sn)
 

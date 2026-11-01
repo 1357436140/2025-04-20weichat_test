@@ -14,5 +14,5 @@ common/tools/chromedriver
 common/tools/chromedriver.exe
 
 # 日志与报告产物
-logs/*.log
+logs/**/*.log
 reports/*.html

@@ -8,6 +8,10 @@ import pytest
 from appium import webdriver
 from common.functions import get_first_phone_sn, get_android_platform_verison
 from common.global_attrs import CHROME_DRIVER_EXECUTABLE
+from common.logger import get_logger
+
+
+logger = get_logger()
 
 
 class Driver:
@@ -35,7 +39,7 @@ class Driver:
             "chromedriverExecutable": self.chrome_driver
 
         }
-        print(desired_caps)
+        logger.info(desired_caps)
         driver = webdriver.Remote('http://127.0.0.1:4723/wd/hub', desired_caps)
         return driver
 

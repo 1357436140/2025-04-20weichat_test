@@ -10,9 +10,14 @@ from appium.webdriver.common.appiumby import AppiumBy
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
+from common.logger import get_logger
+
 """
 元素查找
 """
+logger = get_logger()
+
+
 def find_element_by_resource_id(driver, res_id):
     element = driver.find_element(AppiumBy.ID, res_id)
     return element
@@ -24,7 +29,7 @@ def check_element_exist_by_span_text(driver, text):
     :param xpath:
     :return:
     """
-    print(f"使用span检查页面中元素[{text}]是否存在")
+    logger.info(f"使用span检查页面中元素[{text}]是否存在")
     element = driver.find_element(By.XPATH, f'//span[contains(normalize-space(.),\'{text}\')]')
     if element:
         return True
