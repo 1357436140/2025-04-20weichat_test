@@ -1,0 +1,18 @@
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# chromedriver 等二进制驱动
+common/tools/chromedriver
+common/tools/chromedriver.exe
+
+# 日志与报告产物
+logs/*.log
+reports/*.html
