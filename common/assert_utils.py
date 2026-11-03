@@ -26,8 +26,13 @@ class AssertUtils:
     # H5 页面（Vue 应用）常用的两种文本定位
     XPATH_SPAN_TEXT = '//span[contains(normalize-space(.),"{}")]'
     XPATH_A_TEXT = '//a[contains(normalize-space(.),"{}")]'
-    # 内置浏览器打不开页面时的标题，命中即视为"页面没出来"
-    DEFAULT_ERROR_TITLES = ("无法打开页面", "网络错误", "页面加载失败", "找不到网页")
+    # 内置浏览器/网关打不开页面时的标题关键字，命中即视为"页面没出来"
+    # 注意：网关错误页的 readyState 同样是 complete，只靠 readyState 会假通过
+    DEFAULT_ERROR_TITLES = (
+        "无法打开页面", "网络错误", "页面加载失败", "找不到网页",
+        "网关错误", "502", "503", "504", "Bad Gateway", "Service Unavailable",
+        "该网页无法正常运作", "页面不存在", "访问受限",
+    )
 
     # ==================== 基础断言 ====================
 
@@ -160,13 +165,27 @@ class AssertUtils:
 
     # ==================== 页面断言 ====================
 
+    def match_error_title(self, title, error_titles=None):
+        """
+        description: 标题是否命中错误页关键字（包含匹配，兼容"502 网关错误"这类带前缀的标题）
+        :param title: 页面标题
+        :param error_titles: 关键字集合，默认取 DEFAULT_ERROR_TITLES
+        :return: 命中的关键字；未命中返回 None
+        """
+        text = (title or "").strip().lower()
+        for keyword in (error_titles or self.DEFAULT_ERROR_TITLES):
+            if keyword.lower() in text:
+                return keyword
+        return None
+
     def assert_page_loaded(self, driver, expect_url=None, error_titles=None, timeout=20, msg=""):
         """
-        description: 断言内置浏览器真的加载出目标页面（排除微信错误页/拦截页）
-                     判定条件：URL 为 http(s) + 期望片段命中 + 标题不在错误页名单 + readyState=complete
+        description: 断言内置浏览器真的加载出目标页面（排除微信错误页/网关错误页）
+                     判定条件：URL 为 http(s) + 期望片段命中 + 标题不命中错误页关键字 + readyState=complete
+                     注意：网关错误页（如 502）的 readyState 同样是 complete，只判断 readyState 会假通过
         :param driver: WebDriver（需已切到 WEBVIEW 上下文）
         :param expect_url: 期望 URL 包含的片段（如域名），None 则只校验协议
-        :param error_titles: 错误页标题集合，默认取 DEFAULT_ERROR_TITLES
+        :param error_titles: 错误页标题关键字集合，默认取 DEFAULT_ERROR_TITLES
         :param timeout: 超时秒数
         :param msg: 失败信息
         :return: 当前 URL
@@ -183,10 +202,13 @@ class AssertUtils:
                 last_state = f"读取页面状态失败：{e}"
                 time.sleep(1)
                 continue
+            hit = self.match_error_title(title, titles)
             last_state = f"url={url} title={title} readyState={ready}"
-            if (url.startswith("http")
+            if hit:
+                last_state = f"{last_state}（命中错误页关键字「{hit}」）"
+                logger.warning(f"页面是错误页：{last_state}")
+            elif (url.startswith("http")
                     and (expect_url is None or expect_url in url)
-                    and title not in titles
                     and ready == "complete"):
                 logger.info(f"断言通过｜页面已加载：{last_state}")
                 return url

@@ -1,7 +1,7 @@
 # 微信 H5 自动化测试框架（weichat_test）
 
-> **最后更新时间**：2026-11-03 19:38
-> **当前版本**：v1.3.0
+> **最后更新时间**：2026-11-03 20:35
+> **当前版本**：v1.4.0
 > **维护约定**：每次代码变更同步更新本文档，并在开头刷新"最后更新时间/当前版本"，同时在第 8 节追加更新日志。
 
 面向「微信内置浏览器 H5」的 UI 自动化测试框架，基于 **Appium 2 + UiAutomator2** 驱动真机微信，打通了从**冷启动微信 → 进入指定入口 → 打开 H5 → 切换 WEBVIEW 上下文 → 执行业务断言 → 还原现场**的完整链路，并针对微信 8.0.7x+ 的反自动化、外链风控、XWeb 调试等实际障碍做了工程化封装。
@@ -134,9 +134,20 @@
 
 `cleanup_after_test(stop_weichat=False, close_talkback=True, back_to_desktop=False)`
 
-- 默认：切回 `NATIVE_APP` → 逐级返回（内置浏览器 → 聊天/收藏页 → 首页，实测 2~3 次 `back`）→ 关闭 TalkBack → 可选回桌面；
+- 默认：切回 `NATIVE_APP` → 逐级返回 → 关闭 TalkBack → 可选回桌面。返回次数与页面深度有关：浅层（收藏列表 → H5 → 收藏列表）**2~3 次** `back` 即可；账单页这种深层实测要 **5 次**（4 次在 WebView 里退 H5 路由，第 5 次才关掉页面/退出收藏列表）；
+- 返回判定用 **activity（`LauncherUI`）** 而不是找「通讯录」文本：H5 页里永远找不到该文本，每次 `find_element` 都要等 UiAutomator2 超时（实测 ~10s），5 层页面会直接撞满 `max_back` 预算；
+- 卡住兜底：连续两次 `back` 后 activity 没变化（被 WebView 历史吃掉），改用 `am start … --activity-clear-top` 清任务栈；仍失败则冷启动。`cleanup_after_test` 拿不到 `True` 时还会再兜一层冷启动；
+- 口径提醒：回到的是 `LauncherUI`，可能停在「微信/通讯录/发现/我」任一 tab（实测账单页退回来落在「我」tab），**不等于聊天列表**；下个用例由 `launch_weichat()` 统一拉正；
 - `stop_weichat=True`：直接结束微信进程，隔离最彻底，代价是下次冷启动需重开 XWeb 调试（约多 10 秒）；
 - 目的是让**串行用例**互不干扰：上一条用例深入到多层级页面后，下一条仍从首页开始。
+
+典型返回链路（2026-11-03 日志实测）：
+
+| 次序 | `back` 前所在页面 | 实际动作 |
+|---|---|---|
+| 1–3 | `MMWebViewUI`（账单查询 → 微信总链 → 测试环境首页） | H5 内路由后退，activity 不变 |
+| 4 | `MMWebViewUI`（H5 首层） | 关闭 WebView，落到 `FavoriteIndexUI` |
+| 5 | `FavoriteIndexUI` | 退到 `LauncherUI`（「我」tab），判定命中停止 |
 
 ### 4.6 断言分层：断言不进测试函数
 
@@ -247,7 +258,8 @@ env -u http_proxy -u https_proxy PYTHONPATH=$PWD \
 | `launch_weichat(timeout=30, restart=False, unlock=True)` | 唤醒 → 启动 → 等待主界面就绪（自动开 TalkBack） |
 | `force_stop_weichat()` | 结束微信进程 |
 | `get_current_activity()` | 取前台 Activity（如 `com.tencent.mm/.ui.LauncherUI`） |
-| `wait_weichat_home()` / `is_weichat_home()` / `is_weichat_login_page()` | 首页/登录页判定 |
+| `wait_weichat_home()` / `is_weichat_home()` / `is_weichat_login_page()` | 首页/登录页判定（依赖控件树，需 TalkBack 开启） |
+| `is_weichat_launcher()` | 用 activity 判断是否在主界面（`LauncherUI`），关掉 TalkBack 后仍可用 |
 
 #### 入口与页面
 
@@ -265,8 +277,10 @@ env -u http_proxy -u https_proxy PYTHONPATH=$PWD \
 
 | 方法 | 说明 |
 |---|---|
-| `cleanup_after_test(...)` | 现场还原：回首页 + 关 TalkBack + 可选结束微信/回桌面 |
-| `back_to_weichat_home(max_back=6)` | 逐级返回微信首页 |
+| `cleanup_after_test(...)` | 现场还原：回首页 + 关 TalkBack + 可选结束微信/回桌面；回首页失败自动冷启动兜底 |
+| `back_to_weichat_home(max_back=8)` | 逐级返回微信主界面：activity 判定 + 卡住时清任务栈/冷启动 |
+| `is_weichat_launcher()` | 用 activity 判断是否在微信主界面（`LauncherUI`），不依赖控件树，单次约 0.3s |
+| `launch_weichat_launcher_by_clear_top()` | `am start --activity-clear-top` 一次性清掉 WebView/收藏/聊天子页 |
 | `enable_talkback()` / `disable_talkback()` | 读屏服务开关 |
 | `wait_for_element(locator, timeout)` | 显式等待元素（返回 None 而非抛异常；断言场景用 `AssertUtils`） |
 | `check_zhangdan_exit()` | 轻量检查：断言账单页出现「账单」元素 |
@@ -287,6 +301,7 @@ env -u http_proxy -u https_proxy PYTHONPATH=$PWD \
 8. **`uiautomator dump` 在微信上返回空层级**：CLI 工具局限，Appium 的 UiAutomator2 instrumentation 不受影响。
 9. **日志与驱动文件不入库**：`logs/**/*.log`、`common/tools/chromedriver` 已在 `.gitignore` 中排除。
 10. **页面报 `ERR_CONNECTION_REFUSED(-6)`**：域名解析正常但 TCP 被拒，通常是**服务端 IP 白名单未放通**当前手机出口 IP（不是微信拦截、不是脚本问题）。此前该场景下用例会因元素定位异常/无断言而"假通过"，现已由 `wait_webview_loaded()` 拦截并报错。
+11. **网关 502 页的 `readyState` 同样是 `complete`**：SIT 总链的「1、账单查询」曾指向 `/cos/security/direct/html/webapp/v3/query/index.html`（该路径 502，同页 `/html/webapp/...` 正常），标题为「网关错误」。只判断 `readyState` 会假通过，`assert_page_loaded()` 现已按标题关键字（`网关错误`/`502`/`504`/`Bad Gateway` 等）拦截，并在日志里打出命中的关键字。
 
 ---
 
@@ -296,6 +311,7 @@ env -u http_proxy -u https_proxy PYTHONPATH=$PWD \
 
 | 版本 | 日期 | 变更摘要 |
 |---|---|---|
+| v1.4.0 | 2026-11-03 | 现场还原重构 + 错误页识别：新增 `is_weichat_launcher()`（activity 判定主界面，单次 ~0.3s，关 TalkBack 后仍可用）；`back_to_weichat_home()` 改用 activity 判定、`max_back` 6→8、连续两次无进展时 `am start --activity-clear-top` 清任务栈、仍失败冷启动；`cleanup_after_test()` 回首页失败自动冷启动兜底；`AssertUtils` 新增 `match_error_title()`，`assert_page_loaded()` 改为按标题关键字包含匹配（补 `网关错误`/`502`/`503`/`504`/`Bad Gateway` 等），修掉"网关 502 页 `readyState=complete` 假通过"；`wait_webview_loaded()` 去掉重复的错误页名单，统一走 `DEFAULT_ERROR_TITLES`。**验证情况**：两次实机跑均因 SIT 总链链接指向 `/cos/security/direct/...`（网关 502）在账单页失败，非代码问题；还原链路在"卡住"分支验证通过（2 次 `back` 无进展 → 清任务栈 → `LauncherUI`，回首页=True）；错误页识别已用假 driver 离线验证 |
 | v1.3.0 | 2026-11-03 | 账单页全要素检查：新增 `check_bill_page()`（路由/标题/卡片信息/本期账单/未出账单/查账入口数量/还款按钮/历史账单/现金分期/页脚共 19 项断言）与 `_collect_bill_info()`（采集可变数据只记日志）；断言层新增 `assert_text_present` / `assert_css_present` / `assert_body_text_matches` / `assert_text_count_at_least` / `assert_url_contains`；明确"还款状态、金额、出账日、营销文案、版本号"等会变化的元素**不进断言**；新增第 10 节「扩展开发指南」（自己写脚本的规范、模板与定位速查）。实测 `1 passed in 111.72s` |
 | v1.2.0 | 2026-11-03 | 断言分层：新增 `common/assert_utils.py::AssertUtils`（元素/页面/布尔/相等断言，失败抛 `AssertionError` 并带业务语义信息）；`WeichatUtils` 的 `click_link_sit/click_link_weixin/click_link_title/check_zhangdan_exit/wait_webview_loaded` 及会话/收藏入口的元素校验改为内部断言并返回结果；`test_code_demo.py` 不再写 assert。实测 `1 passed in 108.76s`，每步日志可见"断言通过｜…" |
 | v1.1.0 | 2026-11-03 | 新增 `wait_webview_loaded()` 页面加载校验（URL/标题/readyState 三重判断），收藏入口自动调用；`check_zhangdan_exit()` 返回布尔值，用例改为显式 `assert`，杜绝错误页假通过；白名单放通后实机验证：`1 passed in 108.06s` |

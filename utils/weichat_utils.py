@@ -303,6 +303,7 @@ class WeichatUtils(PageBase):
     def is_weichat_home(self):
         """
         description: 判断当前是否在微信主界面（底部有"通讯录"tab）
+                     注意：依赖控件树，仅在 TalkBack 开启时有效；批量返回首页请用 is_weichat_launcher()
         :return: True/False
         """
         try:
@@ -310,6 +311,16 @@ class WeichatUtils(PageBase):
             return True
         except Exception:
             return False
+
+    def is_weichat_launcher(self):
+        """
+        description: 用 activity 判断是否在微信主界面（LauncherUI，含底部四个 tab 页）。
+                     单次 dumpsys 约 0.3s，而 is_weichat_home 在 WebView 页里必然落空、
+                     要等 UiAutomator2 的查找超时（实测每次约 10s），所以逐级返回时必须用这个
+        :return: True/False
+        """
+        current = self.get_current_activity()
+        return current.startswith("com.tencent.mm/") and current.endswith(".ui.LauncherUI")
 
     def is_weichat_login_page(self):
         """
@@ -423,30 +434,62 @@ class WeichatUtils(PageBase):
         time.sleep(2)
         return self.get_current_activity().startswith("com.tencent.mm/")
 
-    def back_to_weichat_home(self, max_back=6):
+    def back_to_weichat_home(self, max_back=8):
         """
         description: 从任意页面（内置浏览器/聊天页/设置页）逐级返回微信首页，
-                     供串行用例之间还原状态，避免上一个用例的页面深度影响下一个用例
+                     供串行用例之间还原状态，避免上一个用例的页面深度影响下一个用例。
+                     判定用 activity（LauncherUI）而非找「通讯录」文本：H5 页里找不到 tab 文本，
+                     每次 find_element 都要等 UiAutomator2 超时（实测 ~10s），5 层页面就会撞满预算
         :param max_back: 最多返回次数，防止死循环
-        :return: True 表示已回到微信首页
+        :return: True 表示已回到微信主界面
         """
         # 在 WEBVIEW 上下文里按返回是无效的，先切回原生
         if self.driver.current_context != "NATIVE_APP":
             self.driver.switch_to.context("NATIVE_APP")
             time.sleep(1)
+        last_activity = ""
+        same_times = 0
         for i in range(max_back):
-            if self.is_weichat_home():
-                logger.info("已在微信首页")
-                return True
             current = self.get_current_activity()
+            if self.is_weichat_launcher():
+                logger.info(f"已回到微信主界面：{current}")
+                return True
             if current and not current.startswith("com.tencent.mm/"):
                 logger.info(f"已不在微信（前台={current}），重新拉起")
                 self.launch_weichat(timeout=30)
-                return self.is_weichat_home()
+                return self.is_weichat_launcher()
+
+            # back 被 WebView 的历史记录吃掉时 activity 不变：连续两次没进展就直接清任务栈，
+            # 不再一层层退（H5 的 SPA 路由可能有好几层历史）
+            same_times = same_times + 1 if current == last_activity else 0
+            if same_times >= 2:
+                logger.warning(f"连续 {same_times} 次返回仍停在 {current}，改为清任务栈回主界面")
+                if self.launch_weichat_launcher_by_clear_top():
+                    return True
+                logger.warning("清任务栈失败，退回冷启动")
+                self.force_stop_weichat()
+                time.sleep(1)
+                self.launch_weichat(timeout=60)
+                return self.is_weichat_launcher()
+
             logger.info(f"返回上一页（{i + 1}/{max_back}），当前页面：{current}")
             self.driver.back()
+            last_activity = current
             time.sleep(1.5)
-        return self.is_weichat_home()
+        logger.warning(f"返回 {max_back} 次仍未回到主界面（当前={self.get_current_activity()}）")
+        return self.is_weichat_launcher()
+
+    def launch_weichat_launcher_by_clear_top(self):
+        """
+        description: 用 am start + FLAG_ACTIVITY_CLEAR_TOP 把微信任务栈清到主界面，
+                     等价于一次性关掉所有 WebView/收藏/聊天子页，比逐级 back 快且不会退到桌面
+        :return: True 表示已回主界面
+        """
+        logger.info("清任务栈回微信主界面")
+        self.process.execute_shell_output_str(
+            "am start -n com.tencent.mm/.ui.LauncherUI --activity-clear-top")
+        time.sleep(1.5)
+        return self.is_weichat_launcher()
 
     def cleanup_after_test(self, stop_weichat=False, close_talkback=True, back_to_desktop=False):
         """
@@ -457,7 +500,7 @@ class WeichatUtils(PageBase):
                              但需要重新开 XWeb 调试，约多花10秒）
         :param close_talkback: True 则关闭读屏服务，恢复手机正常交互
         :param back_to_desktop: True 则最后按 HOME 回到桌面
-        :return: True 表示已回到微信首页（stop_weichat=True 时恒为 True）
+        :return: True 表示已回到微信主界面（LauncherUI 的 tab 层；stop_weichat=True 时恒为 True）
         """
         ok = True
         if stop_weichat:
@@ -468,6 +511,16 @@ class WeichatUtils(PageBase):
             except Exception as e:
                 logger.error(f"返回微信首页失败：{e}")
                 ok = False
+            if not ok:
+                # 兜底：逐级返回没走通（页面层级过深/前端路由吃掉 back），直接冷启动保证下个用例干净开始
+                logger.warning("逐级返回失败，改用冷启动重置微信")
+                try:
+                    self.force_stop_weichat()
+                    time.sleep(1)
+                    ok = self.launch_weichat(timeout=60)
+                except Exception as e:
+                    logger.error(f"冷启动兜底失败：{e}")
+                    ok = False
         if close_talkback:
             self.disable_talkback()
             # 关闭读屏后系统可能残留 TalkBack 教程/无障碍浮层，只清理这类页面，避免误按返回把微信退掉
@@ -596,11 +649,10 @@ class WeichatUtils(PageBase):
         return context
 
     # 内置浏览器加载失败 / 被拦截时出现的页面标题，出现即视为"打开了但页面没出来"
-    WEBVIEW_ERROR_TITLES = ("无法打开页面", "网络错误", "页面加载失败", "找不到网页")
-
     def wait_webview_loaded(self, expect_url=None, timeout=20):
         """
-        description: 断言内置浏览器真正加载出目标页面（校验逻辑与失败信息统一在 AssertUtils）
+        description: 断言内置浏览器真正加载出目标页面（校验逻辑与失败信息统一在 AssertUtils，
+                     错误页关键字统一用 AssertUtils.DEFAULT_ERROR_TITLES，避免两处名单不一致）
         :param expect_url: 期望 URL 中包含的片段（如域名），None 时只校验是否为 http(s) 页面
         :param timeout: 超时秒数
         :return: 当前页面 URL
@@ -608,9 +660,8 @@ class WeichatUtils(PageBase):
         return self.assert_util.assert_page_loaded(
             self.driver,
             expect_url=expect_url,
-            error_titles=self.WEBVIEW_ERROR_TITLES,
             timeout=timeout,
-            msg=f"{timeout}s 内未加载出目标页面（白名单/网络不通或被拦截时会这样）",
+            msg=f"{timeout}s 内未加载出目标页面（白名单/网络不通、网关 502 或被拦截时会这样）",
         )
 
     # XWeb 调试开关页，微信每次进程重启后需要访问一次才能切 WEBVIEW 上下文
