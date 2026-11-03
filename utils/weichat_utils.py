@@ -12,6 +12,7 @@ from selenium.webdriver.support.wait import WebDriverWait
 
 from common.base_test import PageBase
 from common.logger import get_logger
+from common.assert_utils import AssertUtils
 from common.find_ui import find_element_by_android_uiautomator_text, find_element_by_xpath, find_element_by_span_text, \
     find_element_by_a_text, check_element_exist_by_span_text, find_element_by_resource_id
 
@@ -27,6 +28,8 @@ class WeichatUtils(PageBase):
         return:
         '''
         super().__init__()
+        # 断言工具：公共方法内部调用，校验不通过直接抛 AssertionError
+        self.assert_util = AssertUtils()
 
     def clear_weichat_data(self):
         '''
@@ -83,33 +86,53 @@ class WeichatUtils(PageBase):
             time.sleep(5)
 
     def click_link_sit(self):
+        """
+        description: 点击总链首页的「sit」环境（内部先断言入口存在）
+        :return: True
+        """
         time.sleep(1)
-        element = find_element_by_span_text(self.driver, 'sit')
-        if element:
-            logger.info("点击总链中sit")
-            element.click()
-            time.sleep(2)
+        element = self.assert_util.assert_span_text_present(
+            self.driver, 'sit', msg="总链首页未出现「sit」环境入口，请确认页面已加载")
+        logger.info("点击总链中sit")
+        element.click()
+        time.sleep(2)
+        return True
 
     def click_link_weixin(self):
+        """
+        description: 点击 sit 环境下的「微信」渠道（内部先断言入口存在）
+        :return: True
+        """
         time.sleep(1)
-        element = find_element_by_span_text(self.driver, '微信')
-        if element:
-            logger.info("点击总链中微信")
-            element.click()
-            time.sleep(2)
+        element = self.assert_util.assert_span_text_present(
+            self.driver, '微信', msg="sit 环境页未出现「微信」渠道入口")
+        logger.info("点击总链中微信")
+        element.click()
+        time.sleep(2)
+        return True
 
     def click_link_title(self, title):
-        logger.info('查找标题')
-        element = find_element_by_a_text(self.driver, title)
-        if element:
-            logger.info(f"点击标题:{title}")
-            element.click()
-            time.sleep(15)
+        """
+        description: 点击指定标题的 H5 链接（内部先断言链接存在）
+        :param title: 链接标题，如 "1、账单查询"
+        :return: True
+        """
+        logger.info(f"查找标题：{title}")
+        element = self.assert_util.assert_a_text_present(
+            self.driver, title, timeout=15, msg=f"页面未出现链接「{title}」")
+        logger.info(f"点击标题:{title}")
+        element.click()
+        time.sleep(15)
+        return True
 
     def check_zhangdan_exit(self):
-        result = check_element_exist_by_span_text(self.driver, '账单')
-        logger.info(f"账单元素是否存在：{result}")
-        return result
+        """
+        description: 断言账单查询页已渲染出「账单」元素（失效即抛断言异常）
+        :return: True
+        """
+        self.assert_util.assert_span_text_present(
+            self.driver, '账单', msg="账单查询页面未出现「账单」元素")
+        return True
 
     def launch_weichat(self, timeout=30, restart=False, unlock=True):
         """
@@ -385,25 +408,25 @@ class WeichatUtils(PageBase):
             self.click_weichat_search_box()
         except Exception:
             logger.info("搜索框 id 定位失败，改用 content-desc 定位")
-            search_icon = self.wait_for_element(
-                (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().descriptionContains("搜索")'), timeout=5)
-            if search_icon is None:
-                raise RuntimeError("未找到微信搜索入口")
+            search_icon = self.assert_util.assert_element_present(
+                self.driver,
+                (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().descriptionContains("搜索")'),
+                timeout=5, msg="未找到微信搜索入口")
             search_icon.click()
             time.sleep(1.5)
-        edit = self.wait_for_element((AppiumBy.CLASS_NAME, "android.widget.EditText"), timeout=10)
-        if edit is None:
-            raise RuntimeError("未找到微信搜索输入框")
+        edit = self.assert_util.assert_element_present(
+            self.driver, (AppiumBy.CLASS_NAME, "android.widget.EditText"),
+            timeout=10, msg="未找到微信搜索输入框")
         edit.click()
         edit.clear()
         edit.send_keys(keyword)
         time.sleep(2)
         # 注意：搜索框 EditText 的 text 也是关键词本身，必须限定 TextView 才能命中结果条目
-        target = self.wait_for_element(
-            (AppiumBy.ANDROID_UIAUTOMATOR, f'new UiSelector().text("{keyword}").className("android.widget.TextView")'),
-            timeout=10)
-        if target is None:
-            raise RuntimeError(f"搜索结果中未找到：{keyword}")
+        target = self.assert_util.assert_element_present(
+            self.driver,
+            (AppiumBy.ANDROID_UIAUTOMATOR,
+             f'new UiSelector().text("{keyword}").className("android.widget.TextView")'),
+            timeout=10, msg=f"搜索结果中未找到：{keyword}")
         target.click()
         time.sleep(1.5)
 
@@ -430,18 +453,20 @@ class WeichatUtils(PageBase):
         """
         logger.info(f"发送链接：{url}")
         current = self.get_current_activity()
-        if "fts" in current.lower() or "search" in current.lower():
-            raise RuntimeError(f"当前仍在搜索页({current})，未进入会话，请检查会话进入逻辑")
-        edit = self.wait_for_element((AppiumBy.CLASS_NAME, "android.widget.EditText"), timeout=10)
-        if edit is None:
-            raise RuntimeError("未找到聊天输入框")
+        self.assert_util.assert_true(
+            "fts" not in current.lower() and "search" not in current.lower(),
+            f"当前仍在搜索页({current})，未进入会话，请检查会话进入逻辑")
+        edit = self.assert_util.assert_element_present(
+            self.driver, (AppiumBy.CLASS_NAME, "android.widget.EditText"),
+            timeout=10, msg="未找到聊天输入框")
         edit.click()
         edit.clear()
         edit.send_keys(url)
         time.sleep(1)
-        send_btn = self.wait_for_element((AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("发送")'), timeout=5)
-        if send_btn is None:
-            raise RuntimeError("未找到发送按钮")
+        send_btn = self.assert_util.assert_element_present(
+            self.driver,
+            (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("发送")'),
+            timeout=5, msg="未找到发送按钮")
         send_btn.click()
         time.sleep(2)
 
@@ -475,32 +500,18 @@ class WeichatUtils(PageBase):
 
     def wait_webview_loaded(self, expect_url=None, timeout=20):
         """
-        description: 等待内置浏览器真正加载出目标页面，排除微信错误页/拦截页
-                     未通过校验时抛异常，避免"页面没打开但用例继续往下跑"的假通过
+        description: 断言内置浏览器真正加载出目标页面（校验逻辑与失败信息统一在 AssertUtils）
         :param expect_url: 期望 URL 中包含的片段（如域名），None 时只校验是否为 http(s) 页面
         :param timeout: 超时秒数
         :return: 当前页面 URL
         """
-        start_time = time.time()
-        last_state = ""
-        while time.time() - start_time < timeout:
-            try:
-                url = self.driver.current_url or ""
-                title = self.driver.title or ""
-                ready = self.driver.execute_script("return document.readyState")
-            except Exception as e:
-                last_state = f"读取页面状态失败：{e}"
-                time.sleep(1)
-                continue
-            last_state = f"url={url} title={title} readyState={ready}"
-            if (url.startswith("http")
-                    and (expect_url is None or expect_url in url)
-                    and title not in self.WEBVIEW_ERROR_TITLES
-                    and ready == "complete"):
-                logger.info(f"页面加载完成：{last_state}")
-                return url
-            time.sleep(1)
-        raise RuntimeError(f"{timeout}s 内未加载出目标页面，最后状态：{last_state}（白名单/网络不通或被拦截时会这样）")
+        return self.assert_util.assert_page_loaded(
+            self.driver,
+            expect_url=expect_url,
+            error_titles=self.WEBVIEW_ERROR_TITLES,
+            timeout=timeout,
+            msg=f"{timeout}s 内未加载出目标页面（白名单/网络不通或被拦截时会这样）",
+        )
 
     # XWeb 调试开关页，微信每次进程重启后需要访问一次才能切 WEBVIEW 上下文
     XWEB_DEBUG_URL = "http://debugxweb.qq.com/?inspector=true"
@@ -601,24 +612,18 @@ class WeichatUtils(PageBase):
         self.click_home_page_weichat()
         # 冷启动后 XWeb 调试是关的，切不到 WEBVIEW，先确保开启
         self.ensure_xweb_debug()
-        me_tab = self.wait_for_element(
-            (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("我")'), timeout=10)
-        if me_tab is None:
-            raise RuntimeError("未找到底部「我」标签")
+        me_tab = self.assert_util.assert_native_text_present(
+            self.driver, "我", msg="未找到底部「我」标签")
         me_tab.click()
         time.sleep(1.5)
-        fav_entry = self.wait_for_element(
-            (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("收藏")'), timeout=10)
-        if fav_entry is None:
-            raise RuntimeError("未找到「收藏」入口")
+        fav_entry = self.assert_util.assert_native_text_present(
+            self.driver, "收藏", msg="未找到「收藏」入口")
         fav_entry.click()
         time.sleep(2)
-        item = self.wait_for_element(
-            (AppiumBy.ANDROID_UIAUTOMATOR, f'new UiSelector().text("{title}")'), timeout=10)
-        if item is None:
-            raise RuntimeError(f"收藏列表中未找到：{title}")
+        item = self.assert_util.assert_native_text_present(
+            self.driver, title, msg=f"收藏列表中未找到：{title}")
         logger.info(f"从收藏打开：{title}")
         item.click()
         time.sleep(2)
         self.wait_and_switch_webview(timeout=wait_webview)
-        self.wait_webview_loaded(expect_url=expect_url)
+        return self.wait_webview_loaded(expect_url=expect_url)

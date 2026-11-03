@@ -24,14 +24,14 @@ class TestWeichat(BaseTest):
         self.weichat_util = WeichatUtils()
 
     def test_demo_01(self):
-        # 冷启动微信 -> 从收藏打开测试总链（内部已切到 WEBVIEW，并校验页面真的加载出来）
+        # 冷启动微信 -> 从收藏打开测试总链（内部已切到 WEBVIEW，并断言页面真的加载出来）
         self.weichat_util.launch_weichat()
         self.weichat_util.open_fav_in_wechat(FAV_TITLE, expect_url=EXPECT_URL)
-        # 以下为 H5 内的业务操作
+        # H5 业务操作：每一步内部都调用了断言（见 common/assert_utils.py），失败直接抛 AssertionError
         self.weichat_util.click_link_sit()
         self.weichat_util.click_link_weixin()
         self.weichat_util.click_link_title('1、账单查询')
-        assert self.weichat_util.check_zhangdan_exit() is True, "账单查询页面未出现「账单」元素"
+        self.weichat_util.check_zhangdan_exit()
 
     def teardown_method(self):
         super().teardown()

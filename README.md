@@ -1,7 +1,7 @@
 # 微信 H5 自动化测试框架（weichat_test）
 
-> **最后更新时间**：2026-11-03 19:13
-> **当前版本**：v1.1.0
+> **最后更新时间**：2026-11-03 19:20
+> **当前版本**：v1.2.0
 > **维护约定**：每次代码变更同步更新本文档，并在开头刷新"最后更新时间/当前版本"，同时在第 8 节追加更新日志。
 
 面向「微信内置浏览器 H5」的 UI 自动化测试框架，基于 **Appium 2 + UiAutomator2** 驱动真机微信，打通了从**冷启动微信 → 进入指定入口 → 打开 H5 → 切换 WEBVIEW 上下文 → 执行业务断言 → 还原现场**的完整链路，并针对微信 8.0.7x+ 的反自动化、外链风控、XWeb 调试等实际障碍做了工程化封装。
@@ -56,6 +56,7 @@
 2025-04-20weichat_test/
 ├── confest.py                      # pytest 配置占位（当前为空壳）
 ├── common/                         # 公共基础层
+│   ├── assert_utils.py             # AssertUtils：断言统一入口（元素/页面/布尔/相等）
 │   ├── base_test.py                # 用例基类 BaseTest（setup/teardown 钩子）
 │   ├── driver.py                   # Appium 会话工厂（Mac 版，当前使用）
 │   ├── driver2.py                  # 备用驱动实现
@@ -137,6 +138,18 @@
 - `stop_weichat=True`：直接结束微信进程，隔离最彻底，代价是下次冷启动需重开 XWeb 调试（约多 10 秒）；
 - 目的是让**串行用例**互不干扰：上一条用例深入到多层级页面后，下一条仍从首页开始。
 
+### 4.6 断言分层：断言不进测试函数
+
+为保证"测试函数只描述流程、断言集中管理"，项目做了三层分工：
+
+| 层 | 文件 | 职责 |
+|---|---|---|
+| 断言层 | `common/assert_utils.py` | `AssertUtils` 统一实现元素存在、页面加载、布尔/相等断言；失败抛 `AssertionError` 并带上下文信息 |
+| 业务层 | `utils/weichat_utils.py` | 公共方法内部**调用断言**再执行动作，并向调用方**返回结果**（如 `click_link_sit()` → 断言 sit 入口存在 → 点击 → 返回 `True`） |
+| 用例层 | `scripts/**/test_*.py` | 只编排流程，**不写 assert**：`open_fav_in_wechat → click_link_sit → click_link_weixin → click_link_title → check_zhangdan_exit` |
+
+好处：断言消息只有一处维护；页面没加载/元素没出现时，失败信息直接指向具体步骤（如"总链首页未出现「sit」环境入口"），而不是笼统的 `AssertionError`；后续新增用例不必重复写断言。
+
 ---
 
 ## 5. 快速开始
@@ -187,9 +200,24 @@ env -u http_proxy -u https_proxy PYTHONPATH=$PWD \
 
 ---
 
-## 6. 常用 API（`utils/weichat_utils.py`）
+## 6. 常用 API
 
-### 会话与启动
+### 6.1 断言层 `common/assert_utils.py::AssertUtils`
+
+| 方法 | 说明 | 返回 |
+|---|---|---|
+| `assert_true(condition, msg="")` | 布尔断言 | `condition` |
+| `assert_equal(actual, expected, msg="")` | 相等断言 | `actual` |
+| `assert_element_present(driver, locator, timeout=10, msg="")` | 元素存在断言 | `WebElement` |
+| `assert_span_text_present(driver, text, ...)` | H5 span 文本断言 | `WebElement` |
+| `assert_a_text_present(driver, text, ...)` | H5 a 标签文本断言 | `WebElement` |
+| `assert_native_text_present(driver, text, ...)` | 原生控件文本断言 | `WebElement` |
+| `assert_page_loaded(driver, expect_url=None, ...)` | 页面真实加载断言（URL + 标题 + readyState） | `url` |
+| `assert_page_title_contains(driver, keyword, ...)` | 标题包含关键字断言 | `title` |
+
+### 6.2 业务层 `utils/weichat_utils.py`
+
+#### 会话与启动
 
 | 方法 | 说明 |
 |---|---|
@@ -198,7 +226,7 @@ env -u http_proxy -u https_proxy PYTHONPATH=$PWD \
 | `get_current_activity()` | 取前台 Activity（如 `com.tencent.mm/.ui.LauncherUI`） |
 | `wait_weichat_home()` / `is_weichat_home()` / `is_weichat_login_page()` | 首页/登录页判定 |
 
-### 入口与页面
+#### 入口与页面
 
 | 方法 | 说明 |
 |---|---|
@@ -210,14 +238,15 @@ env -u http_proxy -u https_proxy PYTHONPATH=$PWD \
 | `enter_chat_by_search(keyword)` / `enter_file_transfer_chat()` | 通过搜索进入指定会话 |
 | `send_url_in_current_chat(url)` | 在当前会话发送文本/链接 |
 
-### 还原与工具
+#### 还原与工具
 
 | 方法 | 说明 |
 |---|---|
 | `cleanup_after_test(...)` | 现场还原：回首页 + 关 TalkBack + 可选结束微信/回桌面 |
 | `back_to_weichat_home(max_back=6)` | 逐级返回微信首页 |
 | `enable_talkback()` / `disable_talkback()` | 读屏服务开关 |
-| `wait_for_element(locator, timeout)` | 显式等待元素（返回 None 而非抛异常） |
+| `wait_for_element(locator, timeout)` | 显式等待元素（返回 None 而非抛异常；断言场景用 `AssertUtils`） |
+| `check_zhangdan_exit()` | 断言账单页出现「账单」元素，成功返回 `True` |
 
 ---
 
@@ -242,6 +271,7 @@ env -u http_proxy -u https_proxy PYTHONPATH=$PWD \
 
 | 版本 | 日期 | 变更摘要 |
 |---|---|---|
+| v1.2.0 | 2026-11-03 | 断言分层：新增 `common/assert_utils.py::AssertUtils`（元素/页面/布尔/相等断言，失败抛 `AssertionError` 并带业务语义信息）；`WeichatUtils` 的 `click_link_sit/click_link_weixin/click_link_title/check_zhangdan_exit/wait_webview_loaded` 及会话/收藏入口的元素校验改为内部断言并返回结果；`test_code_demo.py` 不再写 assert。实测 `1 passed in 108.76s`，每步日志可见"断言通过｜…" |
 | v1.1.0 | 2026-11-03 | 新增 `wait_webview_loaded()` 页面加载校验（URL/标题/readyState 三重判断），收藏入口自动调用；`check_zhangdan_exit()` 返回布尔值，用例改为显式 `assert`，杜绝错误页假通过；白名单放通后实机验证：`1 passed in 108.06s` |
 | v1.0.0 | 2026-11-01 | 首个完整文档版本：`open_fav_in_wechat` 收藏入口、`ensure_xweb_debug` 调试自开、`cleanup_after_test` 现场还原、全项目 print→logger、`.gitignore` 修正 |
 | v0.9.0 | 2026-11-01 | 打通端到端链路：TalkBack 放开无障碍、会话进入与发链接、WEBVIEW 上下文修正（主进程 `com.tencent.mm`）、XWeb 调试自动开启 |
