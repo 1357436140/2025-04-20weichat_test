@@ -1,7 +1,7 @@
 # 微信 H5 自动化测试框架（weichat_test）
 
-> **最后更新时间**：2026-11-01 22:25
-> **当前版本**：v1.0.0
+> **最后更新时间**：2026-11-03 19:13
+> **当前版本**：v1.1.0
 > **维护约定**：每次代码变更同步更新本文档，并在开头刷新"最后更新时间/当前版本"，同时在第 8 节追加更新日志。
 
 面向「微信内置浏览器 H5」的 UI 自动化测试框架，基于 **Appium 2 + UiAutomator2** 驱动真机微信，打通了从**冷启动微信 → 进入指定入口 → 打开 H5 → 切换 WEBVIEW 上下文 → 执行业务断言 → 还原现场**的完整链路，并针对微信 8.0.7x+ 的反自动化、外链风控、XWeb 调试等实际障碍做了工程化封装。
@@ -113,10 +113,11 @@
 | 聊天消息 / 文件传输助手 | 命中微信拦截页，DOM `data-module="urlweb"`，文案"如需浏览，请长按网址复制后使用浏览器访问"，**请求根本不发出** | ❌ |
 | 我 → 收藏 → 条目 | 前台 `MMWebViewUI`，地址栏正常显示目标域名并发起请求 | ✅ |
 
-因此业务入口统一走 **收藏**：`open_fav_in_wechat(title)`。
+因此业务入口统一走 **收藏**：`open_fav_in_wechat(title, expect_url=...)`。
 
 - 需提前在微信里**收藏一次**目标链接，把标题传给方法（默认 `测试环境首页`）；
 - 收藏入口不做消息层的链接安全预检，因此未备案域名也能直接请求（页面能否加载取决于服务端 IP 白名单）；
+- 方法内部会调用 `wait_webview_loaded()` 校验"页面真的加载出来了"：URL 必须是 http(s)、标题不在错误页名单（`无法打开页面` 等）、`document.readyState == complete`，任一不满足直接抛异常，避免页面没打开用例却继续往下跑的**假通过**；
 - 聊天入口方法 `open_url_in_wechat(url)` 已标记**停用并保留**，仅用于已备案域名或临时调试。
 
 > 备选入口：扫一扫（生成二维码 → 推入相册 → 扫一扫识别）通常也不受聊天风控限制，且可参数化任意 URL，需要时可再封装。
@@ -201,8 +202,9 @@ env -u http_proxy -u https_proxy PYTHONPATH=$PWD \
 
 | 方法 | 说明 |
 |---|---|
-| `open_fav_in_wechat(title)` | **推荐入口**：我 → 收藏 → 点标题 → 切 WEBVIEW |
+| `open_fav_in_wechat(title, expect_url=None)` | **推荐入口**：我 → 收藏 → 点标题 → 切 WEBVIEW → 校验页面已加载 |
 | `open_url_in_wechat(url)` | 【已停用】文件传输助手发链接再点击（受外链风控限制） |
+| `wait_webview_loaded(expect_url=None)` | 等待并校验页面真正加载（排除错误页/拦截页），失败抛异常 |
 | `ensure_xweb_debug()` | 确保 XWeb 调试开关已开启 |
 | `wait_and_switch_webview(timeout=30)` | 等待并切到微信 webview 上下文 |
 | `enter_chat_by_search(keyword)` / `enter_file_transfer_chat()` | 通过搜索进入指定会话 |
@@ -230,6 +232,7 @@ env -u http_proxy -u https_proxy PYTHONPATH=$PWD \
 7. **`Logger.info()` 只接受一个参数**：多参数必须用 f-string 拼接，否则运行时 `TypeError`。
 8. **`uiautomator dump` 在微信上返回空层级**：CLI 工具局限，Appium 的 UiAutomator2 instrumentation 不受影响。
 9. **日志与驱动文件不入库**：`logs/**/*.log`、`common/tools/chromedriver` 已在 `.gitignore` 中排除。
+10. **页面报 `ERR_CONNECTION_REFUSED(-6)`**：域名解析正常但 TCP 被拒，通常是**服务端 IP 白名单未放通**当前手机出口 IP（不是微信拦截、不是脚本问题）。此前该场景下用例会因元素定位异常/无断言而"假通过"，现已由 `wait_webview_loaded()` 拦截并报错。
 
 ---
 
@@ -239,6 +242,7 @@ env -u http_proxy -u https_proxy PYTHONPATH=$PWD \
 
 | 版本 | 日期 | 变更摘要 |
 |---|---|---|
+| v1.1.0 | 2026-11-03 | 新增 `wait_webview_loaded()` 页面加载校验（URL/标题/readyState 三重判断），收藏入口自动调用；`check_zhangdan_exit()` 返回布尔值，用例改为显式 `assert`，杜绝错误页假通过；白名单放通后实机验证：`1 passed in 108.06s` |
 | v1.0.0 | 2026-11-01 | 首个完整文档版本：`open_fav_in_wechat` 收藏入口、`ensure_xweb_debug` 调试自开、`cleanup_after_test` 现场还原、全项目 print→logger、`.gitignore` 修正 |
 | v0.9.0 | 2026-11-01 | 打通端到端链路：TalkBack 放开无障碍、会话进入与发链接、WEBVIEW 上下文修正（主进程 `com.tencent.mm`）、XWeb 调试自动开启 |
 | v0.1.0 | 2025-04-20 | 项目骨架：Appium 会话工厂、命令执行封装、元素定位工具、日志与基础用例结构 |
@@ -247,7 +251,7 @@ env -u http_proxy -u https_proxy PYTHONPATH=$PWD \
 
 ## 9. 待办 / 后续规划
 
-- [ ] 服务端 IP 白名单放通后，补充首页加载成功断言（当前仅验证到"发起请求 + 进入 MMWebViewUI"）；
+- [x] 服务端 IP 白名单已放通，首页加载成功断言已补齐（`wait_webview_loaded`）；
 - [ ] 封装「扫一扫」入口，支持任意 URL 参数化打开；
 - [ ] 引入 `reports/` HTML 报告与失败自动截图；
 - [ ] 清理 `weichat_utils.py` 中已被 `wait_and_switch_webview()` 取代的旧方法（`switch_content` / `wait_for_content` / `click_test_link` 等）。

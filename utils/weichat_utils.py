@@ -108,7 +108,8 @@ class WeichatUtils(PageBase):
 
     def check_zhangdan_exit(self):
         result = check_element_exist_by_span_text(self.driver, '账单')
-        logger.info(result)
+        logger.info(f"账单元素是否存在：{result}")
+        return result
 
     def launch_weichat(self, timeout=30, restart=False, unlock=True):
         """
@@ -469,6 +470,38 @@ class WeichatUtils(PageBase):
         time.sleep(2)
         return context
 
+    # 内置浏览器加载失败 / 被拦截时出现的页面标题，出现即视为"打开了但页面没出来"
+    WEBVIEW_ERROR_TITLES = ("无法打开页面", "网络错误", "页面加载失败", "找不到网页")
+
+    def wait_webview_loaded(self, expect_url=None, timeout=20):
+        """
+        description: 等待内置浏览器真正加载出目标页面，排除微信错误页/拦截页
+                     未通过校验时抛异常，避免"页面没打开但用例继续往下跑"的假通过
+        :param expect_url: 期望 URL 中包含的片段（如域名），None 时只校验是否为 http(s) 页面
+        :param timeout: 超时秒数
+        :return: 当前页面 URL
+        """
+        start_time = time.time()
+        last_state = ""
+        while time.time() - start_time < timeout:
+            try:
+                url = self.driver.current_url or ""
+                title = self.driver.title or ""
+                ready = self.driver.execute_script("return document.readyState")
+            except Exception as e:
+                last_state = f"读取页面状态失败：{e}"
+                time.sleep(1)
+                continue
+            last_state = f"url={url} title={title} readyState={ready}"
+            if (url.startswith("http")
+                    and (expect_url is None or expect_url in url)
+                    and title not in self.WEBVIEW_ERROR_TITLES
+                    and ready == "complete"):
+                logger.info(f"页面加载完成：{last_state}")
+                return url
+            time.sleep(1)
+        raise RuntimeError(f"{timeout}s 内未加载出目标页面，最后状态：{last_state}（白名单/网络不通或被拦截时会这样）")
+
     # XWeb 调试开关页，微信每次进程重启后需要访问一次才能切 WEBVIEW 上下文
     XWEB_DEBUG_URL = "http://debugxweb.qq.com/?inspector=true"
 
@@ -556,13 +589,14 @@ class WeichatUtils(PageBase):
         time.sleep(2)
         self.wait_and_switch_webview(timeout=wait_webview)
 
-    def open_fav_in_wechat(self, title, wait_webview=30):
+    def open_fav_in_wechat(self, title, wait_webview=30, expect_url=None):
         """
         description: 从「我 -> 收藏」打开指定标题的收藏链接并切换到 WEBVIEW 上下文
                      说明：聊天消息里的链接会触发微信外链风控预检（未备案域名直接出拦截页），
                      而收藏入口不做该预检，可直接请求目标域名，适合被拦域名的自动化入口
         :param title: 收藏条目的标题文本（如 "测试环境首页"）
         :param wait_webview: 等待 webview 出现的超时秒数
+        :param expect_url: 期望 URL 包含的片段，用于确认加载的是目标页而不是错误页
         """
         self.click_home_page_weichat()
         # 冷启动后 XWeb 调试是关的，切不到 WEBVIEW，先确保开启
@@ -587,3 +621,4 @@ class WeichatUtils(PageBase):
         item.click()
         time.sleep(2)
         self.wait_and_switch_webview(timeout=wait_webview)
+        self.wait_webview_loaded(expect_url=expect_url)

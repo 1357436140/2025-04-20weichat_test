@@ -13,6 +13,8 @@ logger = get_logger()
 
 # 测试总链对应的收藏标题（微信聊天入口会被外链风控拦截，统一走「我 -> 收藏」入口）
 FAV_TITLE = "测试环境首页"
+# 用于确认加载的是目标域名，而不是微信错误页/拦截页
+EXPECT_URL = "uatxyk.cibfintech.com"
 
 
 class TestWeichat(BaseTest):
@@ -22,14 +24,14 @@ class TestWeichat(BaseTest):
         self.weichat_util = WeichatUtils()
 
     def test_demo_01(self):
-        # 冷启动微信 -> 从收藏打开测试总链（内部已切换到 WEBVIEW 上下文）
+        # 冷启动微信 -> 从收藏打开测试总链（内部已切到 WEBVIEW，并校验页面真的加载出来）
         self.weichat_util.launch_weichat()
-        self.weichat_util.open_fav_in_wechat(FAV_TITLE)
+        self.weichat_util.open_fav_in_wechat(FAV_TITLE, expect_url=EXPECT_URL)
         # 以下为 H5 内的业务操作
         self.weichat_util.click_link_sit()
         self.weichat_util.click_link_weixin()
         self.weichat_util.click_link_title('1、账单查询')
-        self.weichat_util.check_zhangdan_exit()
+        assert self.weichat_util.check_zhangdan_exit() is True, "账单查询页面未出现「账单」元素"
 
     def teardown_method(self):
         super().teardown()
