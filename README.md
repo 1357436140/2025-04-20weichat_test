@@ -1,6 +1,6 @@
 # 微信 H5 自动化测试框架（weichat_test）
 
-> **最后更新时间**：2026-11-03 19:36
+> **最后更新时间**：2026-11-03 19:38
 > **当前版本**：v1.3.0
 > **维护约定**：每次代码变更同步更新本文档，并在开头刷新"最后更新时间/当前版本"，同时在第 8 节追加更新日志。
 
@@ -296,7 +296,7 @@ env -u http_proxy -u https_proxy PYTHONPATH=$PWD \
 
 | 版本 | 日期 | 变更摘要 |
 |---|---|---|
-| v1.3.0 | 2026-11-03 | 账单页全要素检查：新增 `check_bill_page()`（路由/标题/卡片信息/本期账单/未出账单/查账入口数量/还款按钮/历史账单/现金分期/页脚共 17 项断言）与 `_collect_bill_info()`（采集可变数据只记日志）；断言层新增 `assert_text_present` / `assert_css_present` / `assert_body_text_matches` / `assert_text_count_at_least` / `assert_url_contains`；明确"还款状态、金额、出账日、营销文案、版本号"等会变化的元素**不进断言**；新增第 10 节「扩展开发指南」（自己写脚本的规范、模板与定位速查）。实测 `1 passed in 111.72s` |
+| v1.3.0 | 2026-11-03 | 账单页全要素检查：新增 `check_bill_page()`（路由/标题/卡片信息/本期账单/未出账单/查账入口数量/还款按钮/历史账单/现金分期/页脚共 19 项断言）与 `_collect_bill_info()`（采集可变数据只记日志）；断言层新增 `assert_text_present` / `assert_css_present` / `assert_body_text_matches` / `assert_text_count_at_least` / `assert_url_contains`；明确"还款状态、金额、出账日、营销文案、版本号"等会变化的元素**不进断言**；新增第 10 节「扩展开发指南」（自己写脚本的规范、模板与定位速查）。实测 `1 passed in 111.72s` |
 | v1.2.0 | 2026-11-03 | 断言分层：新增 `common/assert_utils.py::AssertUtils`（元素/页面/布尔/相等断言，失败抛 `AssertionError` 并带业务语义信息）；`WeichatUtils` 的 `click_link_sit/click_link_weixin/click_link_title/check_zhangdan_exit/wait_webview_loaded` 及会话/收藏入口的元素校验改为内部断言并返回结果；`test_code_demo.py` 不再写 assert。实测 `1 passed in 108.76s`，每步日志可见"断言通过｜…" |
 | v1.1.0 | 2026-11-03 | 新增 `wait_webview_loaded()` 页面加载校验（URL/标题/readyState 三重判断），收藏入口自动调用；`check_zhangdan_exit()` 返回布尔值，用例改为显式 `assert`，杜绝错误页假通过；白名单放通后实机验证：`1 passed in 108.06s` |
 | v1.0.0 | 2026-11-01 | 首个完整文档版本：`open_fav_in_wechat` 收藏入口、`ensure_xweb_debug` 调试自开、`cleanup_after_test` 现场还原、全项目 print→logger、`.gitignore` 修正 |
