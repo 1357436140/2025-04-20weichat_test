@@ -5,6 +5,7 @@
 # @Time: 2026-11-03
 # @description: 断言封装。所有 UI 校验集中在这里，业务方法内部调用并返回结果，
 #               测试函数只做流程编排，不再散落 assert。
+import re
 import time
 
 from appium.webdriver.common.appiumby import AppiumBy
@@ -38,7 +39,7 @@ class AssertUtils:
         :return: condition
         """
         assert condition, msg or f"断言失败，实际值：{condition}"
-        logger.info(f"断言通过｜{msg or 'condition is True'}")
+        logger.info("断言通过｜条件成立")
         return condition
 
     def assert_equal(self, actual, expected, msg=""):
@@ -91,6 +92,72 @@ class AssertUtils:
             driver, (AppiumBy.ANDROID_UIAUTOMATOR, f'new UiSelector().text("{text}")'), timeout,
             msg or f"原生页面未出现控件「{text}」")
 
+    def assert_text_present(self, driver, text, timeout=10, msg=""):
+        """断言页面存在指定文本节点（任意标签：p/span/div/i 等），返回元素"""
+        return self.assert_element_present(
+            driver,
+            (AppiumBy.XPATH, f'//*[contains(normalize-space(text()),"{text}")]'),
+            timeout, msg or f"页面未出现文本「{text}」")
+
+    def assert_css_present(self, driver, css_selector, timeout=10, msg=""):
+        """
+        description: 断言存在匹配 CSS 选择器的元素（适合无文字的组件，如图片印章）
+        :return: True
+        """
+        end_time = time.time() + timeout
+        while time.time() < end_time:
+            try:
+                found = driver.execute_script(
+                    "return document.querySelector(arguments[0]) !== null;", css_selector)
+            except Exception:
+                found = False
+            if found:
+                logger.info(f"断言通过｜元素存在：css={css_selector}")
+                return True
+            time.sleep(1)
+        raise AssertionError(msg or f"{timeout}s 内未找到元素：css={css_selector}")
+
+    def assert_body_text_matches(self, driver, pattern, timeout=10, msg=""):
+        """
+        description: 断言页面正文匹配正则（用于金额、日期、版本号等动态文本），返回匹配到的内容
+        """
+        end_time = time.time() + timeout
+        last_body = ""
+        while time.time() < end_time:
+            try:
+                body = driver.execute_script("return document.body.innerText;") or ""
+            except Exception:
+                body = ""
+            last_body = body
+            m = re.search(pattern, body)
+            if m:
+                logger.info(f"断言通过｜正文匹配 /{pattern}/ -> {m.group(0)}")
+                return m.group(0)
+            time.sleep(1)
+        raise AssertionError(
+            msg or f"{timeout}s 内正文未匹配 /{pattern}/，页面文本前200字：{last_body[:200]}")
+
+    def assert_text_count_at_least(self, driver, text, at_least, timeout=10, msg=""):
+        """
+        description: 断言指定完整文本的叶子元素数量不少于 at_least（如账单页应有2个「查账」入口）
+        :return: 实际数量
+        """
+        end_time = time.time() + timeout
+        count = 0
+        while time.time() < end_time:
+            try:
+                count = driver.execute_script(
+                    'return [...document.querySelectorAll("span,a,p,div,button,i")]'
+                    '.filter(e => e.childElementCount === 0 '
+                    '&& (e.innerText||"").trim() === arguments[0]).length;', text)
+            except Exception:
+                count = 0
+            if count >= at_least:
+                logger.info(f"断言通过｜「{text}」出现 {count} 次（要求 ≥{at_least}）")
+                return count
+            time.sleep(1)
+        raise AssertionError(msg or f"「{text}」出现 {count} 次，少于要求的 {at_least} 次")
+
     # ==================== 页面断言 ====================
 
     def assert_page_loaded(self, driver, expect_url=None, error_titles=None, timeout=20, msg=""):
@@ -132,3 +199,10 @@ class AssertUtils:
         assert keyword in title, msg or f"页面标题不含「{keyword}」，实际标题：{title}"
         logger.info(f"断言通过｜标题包含「{keyword}」")
         return title
+
+    def assert_url_contains(self, driver, fragment, msg=""):
+        """断言当前 URL 包含指定片段（如路由 /billMain），返回 URL"""
+        url = driver.current_url or ""
+        assert fragment in url, msg or f"URL 不含「{fragment}」，实际：{url}"
+        logger.info(f"断言通过｜URL 包含「{fragment}」")
+        return url

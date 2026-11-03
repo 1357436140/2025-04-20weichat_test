@@ -31,7 +31,8 @@ class TestWeichat(BaseTest):
         self.weichat_util.click_link_sit()
         self.weichat_util.click_link_weixin()
         self.weichat_util.click_link_title('1、账单查询')
-        self.weichat_util.check_zhangdan_exit()
+        # 账单页全要素检查：校验稳定结构与文案，还款状态/金额/日期/版本号只采集不断言
+        self.weichat_util.check_bill_page()
 
     def teardown_method(self):
         super().teardown()

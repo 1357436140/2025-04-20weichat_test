@@ -134,6 +134,106 @@ class WeichatUtils(PageBase):
             self.driver, '账单', msg="账单查询页面未出现「账单」元素")
         return True
 
+    def check_bill_page(self, expect_url="/billMain"):
+        """
+        description: 账单查询页全要素检查（只校验稳定的结构与文案，不校验会随账务变化的业务数据）
+                     不纳入断言的内容：还款状态（已还清/未还清/逾期）、各金额数值、出账日期、
+                     营销文案与角标、版本号 —— 这些每次跑都可能不同，统一只采集记录
+        :param expect_url: 期望的路由片段
+        :return: dict，本次实际采集到的业务数据（供日志/报告使用，不参与断言）
+        """
+        au = self.assert_util
+        logger.info("开始检查账单查询页")
+
+        # ========== 1. 页面本身 ==========
+        url = au.assert_page_loaded(self.driver, expect_url=expect_url, timeout=15,
+                                    msg="账单查询页未加载出来（白名单/网络异常或页面报错）")
+        au.assert_url_contains(self.driver, expect_url,
+                               msg=f"账单页路由不含「{expect_url}」，实际：{url}")
+        au.assert_page_title_contains(self.driver, "账单查询")
+
+        # ========== 2. 顶部卡片区（卡名与卡号属于用户数据，只校验「卡号后四位」这种结构） ==========
+        au.assert_text_present(self.driver, "切换卡片", msg="账单页右上角未出现「切换卡片」入口")
+        au.assert_body_text_matches(
+            self.driver, r"\S*信用卡\(\d{4}\)",
+            msg="顶部未展示「信用卡名称(卡号后四位)」，卡片信息可能未加载")
+
+        # ========== 3. 本期账单区（只校验标题与字段标签，金额数值不参与断言） ==========
+        au.assert_text_present(self.driver, "本期账单", msg="未出现「本期账单」区块标题")
+        au.assert_text_present(self.driver, "剩余应还", msg="本期账单缺少「剩余应还」字段")
+        au.assert_css_present(self.driver, ".amount", msg="本期账单「剩余应还」金额区域未渲染")
+        au.assert_text_present(self.driver, "剩余最低还款", msg="本期账单缺少「剩余最低还款」字段")
+        au.assert_text_present(self.driver, "账单金额", msg="本期账单缺少「账单金额」字段")
+        au.assert_text_present(self.driver, "可用额度", msg="本期账单缺少「可用额度」字段")
+
+        # ========== 4. 未出账单区 ==========
+        au.assert_text_present(self.driver, "未出账单", msg="未出现「未出账单」区块")
+
+        # ========== 5. 查账入口（本期 + 未出，共 2 个；数量是稳定的页面结构） ==========
+        au.assert_text_count_at_least(self.driver, "查账", 2,
+                                     msg="「查账」入口少于 2 个（本期账单/未出账单各应有一个）")
+
+        # ========== 6. 操作区 ==========
+        au.assert_text_present(self.driver, "还款", msg="账单页未出现「还款」按钮")
+        au.assert_text_present(self.driver, "分期还款", msg="账单页未出现「分期还款」按钮")
+
+        # ========== 7. 历史账单入口 ==========
+        au.assert_text_present(self.driver, "历史账单", msg="账单页未出现「历史账单」入口")
+
+        # ========== 8. 分期/现金类入口 ==========
+        au.assert_text_present(self.driver, "现金分期", msg="账单页未出现「现金分期」入口")
+        au.assert_text_present(self.driver, "预借现金", msg="账单页未出现「预借现金」入口")
+
+        # ========== 9. 页脚版权（版本号会随发布变化，只校验版权主体） ==========
+        au.assert_body_text_matches(
+            self.driver, r"本服务由兴业银行信用卡中心提供",
+            msg="页脚未展示「本服务由兴业银行信用卡中心提供」")
+
+        # ========== 采集业务数据（仅记录，不做断言） ==========
+        info = self._collect_bill_info()
+        logger.info(f"账单页数据采集（不参与断言）：{info}")
+        logger.info("账单查询页检查完成")
+        return info
+
+    def _collect_bill_info(self):
+        """
+        description: 采集账单页上的可变业务数据，仅用于日志/报告留痕，不做断言
+        :return: dict
+        """
+        try:
+            return self.driver.execute_script("""
+                const txt = s => { const e = document.querySelector(s); return e ? e.innerText.trim() : ''; };
+                const all = [...document.querySelectorAll('span,a,p,div,i')]
+                    .filter(e => e.childElementCount === 0)
+                    .map(e => (e.innerText || '').trim()).filter(Boolean);
+                const amounts = [...document.querySelectorAll('.amount')].map(e => {
+                    let label = '';
+                    let box = e.parentElement;
+                    for (let i = 0; i < 3 && box && !label; i++) {
+                        const cand = [...box.querySelectorAll('p,span,div')]
+                            .filter(x => x !== e && !e.contains(x))
+                            .map(x => (x.innerText || '').trim())
+                            .find(t => t && t.length < 16 && t.indexOf('¥') < 0
+                                       && t !== '查账' && !/^[\\d.\\s]+$/.test(t));
+                        if (cand) label = cand.split('\\n')[0];
+                        box = box.parentElement;
+                    }
+                    return { label: label, value: e.innerText.replace(/\\s+/g, '') };
+                });
+                const cardText = all.find(t => /信用卡\\(\\d{4}\\)/.test(t)) || '';
+                const billDate = (all.find(t => /\\d+月\\d+日出账/.test(t)) || '');
+                const footer = txt('.version-view');
+                const state = document.querySelector('.paid-off') ? '已还清' : '未还清/其它';
+                return {
+                    card: cardText, repayment_state: state, amounts: amounts,
+                    unbilled_date: billDate, footer: footer,
+                    env_version: (footer.match(/(\\w+)\\s+(v[\\d.]+)/) || []).slice(1).join(' ')
+                };
+            """)
+        except Exception as e:
+            logger.warning(f"账单页数据采集失败（不影响断言）：{e}")
+            return {}
+
     def launch_weichat(self, timeout=30, restart=False, unlock=True):
         """
         description: 启动微信并等待主界面（底部tab）加载完成

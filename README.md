@@ -1,7 +1,7 @@
 # 微信 H5 自动化测试框架（weichat_test）
 
-> **最后更新时间**：2026-11-03 19:20
-> **当前版本**：v1.2.0
+> **最后更新时间**：2026-11-03 19:36
+> **当前版本**：v1.3.0
 > **维护约定**：每次代码变更同步更新本文档，并在开头刷新"最后更新时间/当前版本"，同时在第 8 节追加更新日志。
 
 面向「微信内置浏览器 H5」的 UI 自动化测试框架，基于 **Appium 2 + UiAutomator2** 驱动真机微信，打通了从**冷启动微信 → 进入指定入口 → 打开 H5 → 切换 WEBVIEW 上下文 → 执行业务断言 → 还原现场**的完整链路，并针对微信 8.0.7x+ 的反自动化、外链风控、XWeb 调试等实际障碍做了工程化封装。
@@ -146,9 +146,27 @@
 |---|---|---|
 | 断言层 | `common/assert_utils.py` | `AssertUtils` 统一实现元素存在、页面加载、布尔/相等断言；失败抛 `AssertionError` 并带上下文信息 |
 | 业务层 | `utils/weichat_utils.py` | 公共方法内部**调用断言**再执行动作，并向调用方**返回结果**（如 `click_link_sit()` → 断言 sit 入口存在 → 点击 → 返回 `True`） |
-| 用例层 | `scripts/**/test_*.py` | 只编排流程，**不写 assert**：`open_fav_in_wechat → click_link_sit → click_link_weixin → click_link_title → check_zhangdan_exit` |
+| 用例层 | `scripts/**/test_*.py` | 只编排流程，**不写 assert**：`open_fav_in_wechat → click_link_sit → click_link_weixin → click_link_title → check_bill_page` |
 
 好处：断言消息只有一处维护；页面没加载/元素没出现时，失败信息直接指向具体步骤（如"总链首页未出现「sit」环境入口"），而不是笼统的 `AssertionError`；后续新增用例不必重复写断言。
+
+### 4.7 账单页检查策略：只断言"稳定的东西"
+
+`check_bill_page()` 对账单查询页做全要素检查，但**刻意把会随账务变化的内容排除在断言之外**——否则每月账单状态一变，用例就红。
+
+| 纳入断言（结构与固定文案） | 只采集不断言（会变化） |
+|---|---|
+| 路由 `/billMain`、标题「账单查询」 | 还款状态章（已还清/未还清/逾期，印章还是图片） |
+| 「切换卡片」入口、卡号后四位格式 `(\d{4})` | 各金额数值（剩余应还/账单金额/可用额度/未出账单） |
+| 区块标题：本期账单、未出账单 | 未出账单的出账日期（如「11月15日出账」） |
+| 字段标签：剩余应还、剩余最低还款、账单金额、可用额度 | 营销角标文案（如「跨行还款0手续费」「推荐」） |
+| 「查账」入口数量 ≥2（本期 + 未出各一） | 页脚版本号（随发布变化） |
+| 按钮：还款、分期还款；入口：历史账单、现金分期、预借现金 | 环境标识（sit/uat，随环境变化） |
+| 页脚版权主体「本服务由兴业银行信用卡中心提供」 | — |
+
+采集到的可变数据通过 `_collect_bill_info()` 返回并写进日志（如 `{'card': '标准白金信用卡(9636)', 'repayment_state': '已还清', 'amounts': [...], 'unbilled_date': '11月15日出账', 'env_version': 'sit v4.63.1'}`），排查问题时能看到当时的真实账务状态，但不影响用例结果。
+
+对应断言手段：文本用 `assert_text_present`（任意标签）、图片/组件用 `assert_css_present`（如 `.amount` 金额块）、动态文本用 `assert_body_text_matches`（正则）、数量用 `assert_text_count_at_least`。
 
 ---
 
@@ -214,6 +232,11 @@ env -u http_proxy -u https_proxy PYTHONPATH=$PWD \
 | `assert_native_text_present(driver, text, ...)` | 原生控件文本断言 | `WebElement` |
 | `assert_page_loaded(driver, expect_url=None, ...)` | 页面真实加载断言（URL + 标题 + readyState） | `url` |
 | `assert_page_title_contains(driver, keyword, ...)` | 标题包含关键字断言 | `title` |
+| `assert_url_contains(driver, fragment, ...)` | URL 包含片段断言（如路由 `/billMain`） | `url` |
+| `assert_text_present(driver, text, ...)` | 任意标签（p/span/div/i…）文本断言 | `WebElement` |
+| `assert_css_present(driver, css, ...)` | CSS 选择器存在断言（无文字组件，如图片印章） | `True` |
+| `assert_body_text_matches(driver, pattern, ...)` | 正文正则匹配断言（金额/日期/版本号等动态文本） | 匹配到的字符串 |
+| `assert_text_count_at_least(driver, text, at_least, ...)` | 元素数量下限断言（如「查账」应有 2 个） | 实际数量 |
 
 ### 6.2 业务层 `utils/weichat_utils.py`
 
@@ -246,7 +269,9 @@ env -u http_proxy -u https_proxy PYTHONPATH=$PWD \
 | `back_to_weichat_home(max_back=6)` | 逐级返回微信首页 |
 | `enable_talkback()` / `disable_talkback()` | 读屏服务开关 |
 | `wait_for_element(locator, timeout)` | 显式等待元素（返回 None 而非抛异常；断言场景用 `AssertUtils`） |
-| `check_zhangdan_exit()` | 断言账单页出现「账单」元素，成功返回 `True` |
+| `check_zhangdan_exit()` | 轻量检查：断言账单页出现「账单」元素 |
+| `check_bill_page(expect_url="/billMain")` | **账单页全要素检查**：路由/标题/卡片/本期账单/未出账单/查账入口/按钮/历史账单/现金分期/页脚，只断言稳定元素；返回采集到的业务数据 dict |
+| `_collect_bill_info()` | 采集可变业务数据（还款状态、金额、出账日、版本号），仅供日志留痕 |
 
 ---
 
@@ -271,6 +296,7 @@ env -u http_proxy -u https_proxy PYTHONPATH=$PWD \
 
 | 版本 | 日期 | 变更摘要 |
 |---|---|---|
+| v1.3.0 | 2026-11-03 | 账单页全要素检查：新增 `check_bill_page()`（路由/标题/卡片信息/本期账单/未出账单/查账入口数量/还款按钮/历史账单/现金分期/页脚共 17 项断言）与 `_collect_bill_info()`（采集可变数据只记日志）；断言层新增 `assert_text_present` / `assert_css_present` / `assert_body_text_matches` / `assert_text_count_at_least` / `assert_url_contains`；明确"还款状态、金额、出账日、营销文案、版本号"等会变化的元素**不进断言**；新增第 10 节「扩展开发指南」（自己写脚本的规范、模板与定位速查）。实测 `1 passed in 111.72s` |
 | v1.2.0 | 2026-11-03 | 断言分层：新增 `common/assert_utils.py::AssertUtils`（元素/页面/布尔/相等断言，失败抛 `AssertionError` 并带业务语义信息）；`WeichatUtils` 的 `click_link_sit/click_link_weixin/click_link_title/check_zhangdan_exit/wait_webview_loaded` 及会话/收藏入口的元素校验改为内部断言并返回结果；`test_code_demo.py` 不再写 assert。实测 `1 passed in 108.76s`，每步日志可见"断言通过｜…" |
 | v1.1.0 | 2026-11-03 | 新增 `wait_webview_loaded()` 页面加载校验（URL/标题/readyState 三重判断），收藏入口自动调用；`check_zhangdan_exit()` 返回布尔值，用例改为显式 `assert`，杜绝错误页假通过；白名单放通后实机验证：`1 passed in 108.06s` |
 | v1.0.0 | 2026-11-01 | 首个完整文档版本：`open_fav_in_wechat` 收藏入口、`ensure_xweb_debug` 调试自开、`cleanup_after_test` 现场还原、全项目 print→logger、`.gitignore` 修正 |
@@ -285,3 +311,136 @@ env -u http_proxy -u https_proxy PYTHONPATH=$PWD \
 - [ ] 封装「扫一扫」入口，支持任意 URL 参数化打开；
 - [ ] 引入 `reports/` HTML 报告与失败自动截图；
 - [ ] 清理 `weichat_utils.py` 中已被 `wait_and_switch_webview()` 取代的旧方法（`switch_content` / `wait_for_content` / `click_test_link` 等）。
+
+---
+
+## 10. 扩展开发指南（自己写脚本）
+
+### 10.1 三条铁律
+
+1. **测试函数只编排流程**，不写 `assert`、不写 `find_element`；
+2. **断言只在 `common/assert_utils.py`**，失败信息写清"哪个页面、缺什么、可能原因"；
+3. **一个业务动作 = 一个业务方法**："断言元素存在 → 动作 → 返回结果"，放在 `utils/weichat_utils.py`。
+
+> 为什么这么分：断言集中后，元素选择器/文案变了只改一处；失败信息直接指向步骤，而不是所有用例都报同一个 `AssertionError`。
+
+### 10.2 新增一个页面（以"还款页"为例）
+
+**第 1 步：先探页面，拿到真实文案与结构**
+
+```bash
+# 手动走到目标页后，抓 DOM / 文案 / 是否 vConsole 遮挡
+adb exec-out screencap -p > /tmp/page.png
+```
+
+在 Appium 会话里跑一段临时代码落盘 `driver.page_source`，比对着截图确认：区块标题、字段标签、按钮文案、金额的 class（判断哪个能用 CSS 稳定选中）、哪些文字是动态数据。
+
+**第 2 步：需要新断言手段时，才去加断言方法**
+
+已有手段基本够用（文本/链接/原生控件/CSS/正则/数量/页面加载），只有遇到"新形态"才扩展 `AssertUtils`，例如"元素可点击""元素数量等于 N""输入框可输入"：
+
+```python
+def assert_element_enabled(self, driver, locator, timeout=10, msg=""):
+    element = self.assert_element_present(driver, locator, timeout, msg)
+    assert element.is_enabled(), msg or f"元素不可用：{locator[1]}"
+    logger.info("断言通过｜元素可交互")
+    return element
+```
+
+**第 3 步：在 `WeichatUtils` 加业务方法**
+
+```python
+def open_repay_page(self, expect_url="/repayMain"):
+    """
+    description: 从账单页进入还款页并校验页面已加载
+    :return: True
+    """
+    entry = self.assert_util.assert_text_present(
+        self.driver, "还款", msg="账单页未出现「还款」按钮，可能页面未加载完成")
+    entry.click()
+    time.sleep(2)
+    self.assert_util.assert_page_loaded(self.driver, expect_url=expect_url, timeout=15,
+                                        msg="还款页未加载出来")
+    self.assert_util.assert_page_title_contains(self.driver, "还款")
+    return True
+
+def check_repay_page(self):
+    """还款页结构检查：只断言固定标签与入口，金额/优惠等可变内容只采集"""
+    au = self.assert_util
+    au.assert_text_present(self.driver, "还款金额", msg="还款页缺少「还款金额」字段")
+    au.assert_text_present(self.driver, "立即还款", msg="还款页未出现「立即还款」按钮")
+    return True
+```
+
+**第 4 步：写在用例里（只编排）**
+
+```python
+def test_repay_01(self):
+    self.weichat_util.launch_weichat()
+    self.weichat_util.open_fav_in_wechat(FAV_TITLE, expect_url=EXPECT_URL)
+    self.weichat_util.click_link_sit()
+    self.weichat_util.click_link_weixin()
+    self.weichat_util.click_link_title('2、还款')
+    self.weichat_util.check_repay_page()
+```
+
+### 10.3 用例文件模板（复制即用）
+
+```python
+# -*- coding: utf-8 -*-
+from common.base_test import BaseTest
+from common.logger import get_logger
+from utils.weichat_utils import WeichatUtils
+
+logger = get_logger()
+
+FAV_TITLE = "测试环境首页"
+EXPECT_URL = "uatxyk.cibfintech.com"
+
+
+class TestXxx(BaseTest):
+
+    def setup_method(self, method):
+        super().setup_method(method)
+        self.weichat_util = WeichatUtils()
+
+    def test_xxx_01(self):
+        self.weichat_util.launch_weichat()
+        self.weichat_util.open_fav_in_wechat(FAV_TITLE, expect_url=EXPECT_URL)
+        # ...业务步骤（每个方法内部自带断言）
+
+    def teardown_method(self):
+        super().teardown()
+        # 默认：回微信首页 + 关 TalkBack；用例改过数据时用 stop_weichat=True 彻底隔离
+        self.weichat_util.cleanup_after_test(stop_weichat=False, close_talkback=True)
+        self.weichat_util.driver.quit()
+```
+
+### 10.4 断言什么、不断言什么
+
+- **断言**：页面路由/标题、区块标题、字段标签、按钮与入口、固定的版权文案、稳定的数量关系（如「查账」2 个）；
+- **不要断言**：金额数值、还款状态（已还清/逾期）、出账日期、优惠/角标文案、版本号、环境标识 —— 这些每次跑都可能不同，断言只会制造假失败；用 `_collect_bill_info()` 这类方法**采集并写日志**即可。
+
+判断标准一句话：**这条断言在"业务正常"的前提下，明天、下个月、换个账号跑，结果是否一定一样？** 不一定，就别写进断言。
+
+### 10.5 定位速查
+
+| 场景 | 写法 |
+|---|---|
+| H5 文本（span/a） | `assert_span_text_present` / `assert_a_text_present` |
+| H5 文本（标签不确定） | `assert_text_present`（任意标签） |
+| H5 无文字组件（图片印章、图标） | `assert_css_present(driver, ".paid-off")` |
+| 动态文本（金额/日期/版本） | `assert_body_text_matches(driver, r"¥\d+\.\d+")` |
+| 数量关系 | `assert_text_count_at_least(driver, "查账", 2)` |
+| 原生控件（微信界面） | `assert_native_text_present` / `wait_for_element` + `AppiumBy` |
+
+### 10.6 运行与提交
+
+```bash
+# 单条用例
+env -u http_proxy -u https_proxy PYTHONPATH=$PWD \
+  /Library/Frameworks/Python.framework/Versions/3.10/bin/python3 -m pytest \
+  scripts/redmi_note_11pro/test_xxx.py -s -v
+```
+
+提交前顺手做三件事：①刷新文首"最后更新时间/当前版本"；②在第 8 节加一条更新日志；③确认 `logs/` 下没有把运行日志提交上去。
